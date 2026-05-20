@@ -55,7 +55,7 @@
 
 ### 索引优化
 28. 哪些情况下索引会失效？请尽可能多地列举。 
--- 语法问题：索引字段做函数，隐式类型转换。 场景问题：最左前缀和like，is null和is not null，not in和not exist。 数据问题：表的行就是比较少
+ -- 语法问题：索引字段做函数，隐式类型转换。 场景问题：最左前缀和like，is null和is not null，not in和not exist。 数据问题：表的行就是比较少
 29. 为什么对索引列使用函数或运算会导致索引失效？
 30. 什么是前缀索引？如何选择合适的前缀长度？
 31. 索引的选择性（Cardinality）是什么？为什么低选择性列不适合建索引？
@@ -66,7 +66,8 @@
  -- index全索引：三种情况SELECT name FROM user、SELECT id, age FROM user ORDER BY age、SELECT age, COUNT(*) FROM user GROUP BY age（age有索引）
  -- all 全表
 35. `EXPLAIN` 中 Extra 字段出现 `Using filesort` 和 `Using temporary` 分别意味着什么？
- -- Using filesort  ORDER BY  MySQL 无法用索引的有序性完成排序，需要额外做一次排序。：数据量大时会把数据写到磁盘临时文件里做归并排序，数据量小时在内存的 sort buffer 里排。名字有误导，不是一定用了文件。
+ -- Using filesort  ORDER BY  MySQL 无法用索引的有序性完成排序，需要额外做一次排序。：数据量大时会把数据写到磁盘临时文件里做归并排序，数据量小时在内存的 sort buffer 里排。
+    名字有误导，不是一定用了文件。
     Using temporary GROUP BY、DISTINCT、UNION  MySQL 需要建一张隐式临时表来暂存中间结果
 
     sort_buffer_size（256KB）
@@ -78,26 +79,40 @@
 ## 四、SQL 优化
 
 36. `SELECT *` 有什么问题？为什么要指定查询列？
-37. 大表的 `COUNT(*)` 为什么慢？InnoDB 和 MyISAM 有什么差别？
-38. `ORDER BY` 是如何执行的？什么情况下会用到 filesort？如何优化？
-39. `GROUP BY` 的执行原理是什么？如何优化慢的 `GROUP BY` 查询？
-40. `LIMIT` 分页在偏移量很大时为什么会很慢？如何优化深度分页？
+37. 大表的 `COUNT(*)` 为什么慢？InnoDB 和 MyISAM 有什么差别？ -- Innodb支持事务，无法存一个count，每次都是走最小的二级索引来计算。 myisam自己存了一个。
+38. `ORDER BY` 是如何执行的？什么情况下会用到 filesort？如何优化？ 
+  -- 无法利用索引本身的有序性，而需要在内存（或磁盘）中进行额外的排序操作。优化点就是要命中索引，另外 减少select *、使用limit（这是另一个方面减少总占用内存），
+39. `GROUP BY` 的执行原理是什么？如何优化慢的 `GROUP BY` 查询？ -- 排序分组（Sort-Based）依赖数据有序；哈希分组（Hash-Based）依赖内存充足
+40. `LIMIT` 分页在偏移量很大时为什么会很慢？如何优化深度分页？  -- 先数数，再丢弃。 优化方向：1、游标查询。2、只取主键，不取*，后面再查*。3、业务优化。
 41. `JOIN` 的执行算法有哪几种（NLJ、BNL、Hash Join）？各自的适用场景是什么？
 42. 为什么要避免在 `JOIN` 的关联字段上数据类型不一致？
 43. 子查询和 `JOIN` 哪个性能更好？为什么？
 44. `IN` 和 `EXISTS` 的区别是什么？分别适合什么场景？
 45. `UNION` 和 `UNION ALL` 的区别是什么？
-46. 如何优化一条执行很慢的 SQL？完整的排查思路是什么？
-47. 什么是慢查询日志？如何开启和分析？
+46. 如何优化一条执行很慢的 SQL？完整的排查思路是什么？ -- explain：看是否命中索引、看索引区分度和数据量。如果没有，语法是否有索引列函数转换。然后是业务层面优化。
+    -- type：
+    -- ref：where a=1、range范围索引：where a>1 and a<10、all 全表
+    -- index全索引：三种情况SELECT name FROM user、SELECT id, age FROM user ORDER BY age、SELECT age, COUNT(*) FROM user GROUP BY age（age有索引）
+    -- key：rows：extra
+47. 什么是慢查询日志？如何开启和分析？  -- slow_query_log、long_query_time。
+    -- 我们有慢查询平台：
+    时间：
+    Query_time：SQL的总执行时间（重点关注）。
+    Lock_time：锁等待时间。如果这个值很大，说明可能存在锁竞争或表锁导致的阻塞。
+    空间:
+    Rows_examined：扫描行数。如果这个数字非常大，但返回给客户端的 Rows_sent很小，说明索引设计极其糟糕，进行了大量的无效扫描。
+    SQL 语句本体：最终要优化的对象。
+
 48. `pt-query-digest` 工具的作用是什么？
 
 ---
 
 ## 五、事务
 
-49. 事务的 ACID 特性分别是什么？InnoDB 如何保证每一条？
-50. MySQL 支持哪几种事务隔离级别？默认是哪个？
-51. 脏读、不可重复读、幻读分别是什么？举例说明。
+49. 事务的 ACID 特性分别是什么？ -- 原子，一致，隔离，持久。 
+49. InnoDB 如何保证原子性？ -- 
+50. MySQL 支持哪几种事务隔离级别？默认是哪个？ -- 
+51. 脏读、不可重复读、幻读分别是什么？举例说明。 -- 
 52. 可重复读（RR）隔离级别下，幻读问题真的被完全解决了吗？
 53. 事务的隔离级别是如何实现的？底层依赖哪些机制？
 54. 什么是长事务？长事务会带来哪些问题？如何避免？

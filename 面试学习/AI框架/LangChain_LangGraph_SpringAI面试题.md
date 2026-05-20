@@ -7,8 +7,11 @@
 ## 一、LangChain 基础概念
 
 1. LangChain 是什么？它解决了 LLM 应用开发的哪些痛点？
+ -- 提供了记忆模块、检索增强、组件统一封装、复杂流程编排、提示词结构化、输出解析
 2. LangChain 的核心抽象层有哪几个（Model I/O / Retrieval / Chains / Agents / Memory / Callbacks）？各自负责什么？
+  -- 结合代码看看
 3. LangChain 支持哪些编程语言版本？Python 版和 JS/TS 版在功能上有什么差异？
+  -- java版本最早不是官方写的：1、@AiService声明式编程，仿spriBoot。2、RAG控制更精细。3、不强制要求绑定spriBoot框架，原生Java项目也可以用。
 4. `langchain` / `langchain-core` / `langchain-community` / `langchain-experimental` 这几个包分别包含什么内容？为什么要拆分？
 5. LangChain 0.1 到 0.3 版本的演进中，有哪些重大架构变化？LCEL 是在哪个版本引入的？
 
