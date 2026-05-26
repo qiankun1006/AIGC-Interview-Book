@@ -1,5 +1,3 @@
-package demo;
-
 import java.util.*;
 
 /**
@@ -57,7 +55,7 @@ import java.util.*;
  *   Redo Log 里的 prepare 记录和 Binlog 里的事务都带同一个 XID
  *   崩溃恢复时就靠 XID 关联 Redo Log 和 Binlog
  */
-public class TwoPhaseCommitDemo {
+public class TwoPhaseCommitDemo extends MysqlDemoBase {
 
     // ==================== 组件定义 ====================
 
@@ -373,11 +371,11 @@ public class TwoPhaseCommitDemo {
     static void reset() {
         diskData.clear(); bufferPool.clear();
         redoLog.clear();  binlog.clear();
-        diskData.put("Alice", 1000);
-        diskData.put("Bob",   500);
+        diskData.put("Alice", ALICE_INIT);  // 10000
+        diskData.put("Bob",   BOB_INIT);    // 5000
         syncBinlog = 1; flushRedoPolicy = 1;
         System.out.println("─────────────────────────────────────");
-        System.out.println("重置：Alice=1000, Bob=500");
+        System.out.println("重置：Alice=" + ALICE_INIT + ", Bob=" + BOB_INIT);
         System.out.println("配置：sync_binlog=1, innodb_flush_log_at_trx_commit=1（双1）");
         System.out.println("─────────────────────────────────────");
     }
@@ -413,13 +411,13 @@ public class TwoPhaseCommitDemo {
     /** 场景1：正常转账，演示完整两阶段提交 */
     static void scenario1_normalCommit() {
         long xid = xidCounter++;
-        System.out.println("\n[BEGIN] Alice 转 200 元给 Bob，xid=" + xid);
+        System.out.println("\n[BEGIN] Alice 转 " + TRANSFER_AMT + " 元给 Bob，xid=" + xid);
 
         System.out.println("\n  ── 事务执行阶段（数据修改）──");
-        update(xid, "Alice", 800);
-        update(xid, "Bob", 700);
+        update(xid, "Alice", ALICE_AFTER);  // 10000 - 2000 = 8000
+        update(xid, "Bob",   BOB_AFTER);    // 5000  + 2000 = 7000
 
-        twoPhaseCommit(xid, "Alice转账给Bob");
+        twoPhaseCommit(xid, "Alice转" + TRANSFER_AMT + "给Bob");
 
         System.out.println("\n最终磁盘数据: " + diskData);
         System.out.println("✓ 两阶段提交保证 Redo Log 和 Binlog 完全一致");
@@ -433,10 +431,10 @@ public class TwoPhaseCommitDemo {
      */
     static void scenario2_crashAfterPrepareBeforeBinlog() {
         long xid = xidCounter++;
-        System.out.println("\n[BEGIN] Alice 转 200 元给 Bob，xid=" + xid);
+        System.out.println("\n[BEGIN] Alice 转 " + TRANSFER_AMT + " 元给 Bob，xid=" + xid);
 
-        update(xid, "Alice", 800);
-        update(xid, "Bob", 700);
+        update(xid, "Alice", ALICE_AFTER);  // 8000
+        update(xid, "Bob",   BOB_AFTER);    // 7000
 
         System.out.println("\n  ▶ Phase 1 - Prepare（写 Redo Log prepare，fsync）");
         RedoLogEntry prepareEntry = new RedoLogEntry(xid, RedoLogEntry.State.PREPARE);
@@ -445,7 +443,7 @@ public class TwoPhaseCommitDemo {
         System.out.println("  " + prepareEntry + "  Redo Log fsync ✓");
 
         System.out.println("\n  ★ [CRASH!] 崩溃点1：Redo Log prepare 已落盘，Binlog 还没写！");
-        System.out.println("  Buffer Pool 丢失，磁盘数据仍为 Alice=1000, Bob=500");
+        System.out.println("  Buffer Pool 丢失，磁盘数据仍为 Alice=" + ALICE_INIT + ", Bob=" + BOB_INIT);
         // Binlog 里没有 XID_COMMIT，因为还没写到那一步
         bufferPool.clear();
         System.out.println("  Redo Log 中：有 PREPARE（xid=" + xid + "），无 COMMIT");
@@ -463,10 +461,10 @@ public class TwoPhaseCommitDemo {
      */
     static void scenario3_crashAfterBinlogBeforeCommit() {
         long xid = xidCounter++;
-        System.out.println("\n[BEGIN] Alice 转 200 元给 Bob，xid=" + xid);
+        System.out.println("\n[BEGIN] Alice 转 " + TRANSFER_AMT + " 元给 Bob，xid=" + xid);
 
-        update(xid, "Alice", 800);
-        update(xid, "Bob", 700);
+        update(xid, "Alice", ALICE_AFTER);  // 8000
+        update(xid, "Bob",   BOB_AFTER);    // 7000
 
         System.out.println("\n  ▶ Phase 1 - Prepare（写 Redo Log prepare，fsync）");
         RedoLogEntry prepareEntry = new RedoLogEntry(xid, RedoLogEntry.State.PREPARE);
@@ -481,15 +479,15 @@ public class TwoPhaseCommitDemo {
         System.out.println("  " + xidEvt + "  Binlog fsync ✓");
 
         System.out.println("\n  ★ [CRASH!] 崩溃点2：Binlog 已落盘，Redo Log commit 还没写！");
-        System.out.println("  Buffer Pool 丢失，磁盘数据仍为 Alice=1000, Bob=500");
+        System.out.println("  Buffer Pool 丢失，磁盘数据仍为 Alice=" + ALICE_INIT + ", Bob=" + BOB_INIT);
         bufferPool.clear();
-        diskData.put("Alice", 1000);
-        diskData.put("Bob", 500);
+        diskData.put("Alice", ALICE_INIT);  // 10000
+        diskData.put("Bob",   BOB_INIT);    // 5000
         System.out.println("  Redo Log 中：有 PREPARE（xid=" + xid + "），无 COMMIT");
         System.out.println("  Binlog  中：有 XID_COMMIT（xid=" + xid + "）← 这是关键！");
 
         crashRecovery("崩溃点2：Binlog后commit前");
-        System.out.println("✓ 补提交后：主库 Alice=800, Bob=700（转账成功）");
+        System.out.println("✓ 补提交后：主库 Alice=" + ALICE_AFTER + ", Bob=" + BOB_AFTER + "（转账成功）");
         System.out.println("✓ 从库已通过 Binlog 复制了这次变更");
         System.out.println("✓ 主从一致，数据安全");
     }
@@ -509,9 +507,9 @@ public class TwoPhaseCommitDemo {
         System.out.println("风险：Binlog 在 OS cache，若 OS 崩溃则丢失");
 
         long xid = xidCounter++;
-        System.out.println("\n[BEGIN] Alice 转 200 元给 Bob，xid=" + xid);
-        update(xid, "Alice", 800);
-        update(xid, "Bob", 700);
+        System.out.println("\n[BEGIN] Alice 转 " + TRANSFER_AMT + " 元给 Bob，xid=" + xid);
+        update(xid, "Alice", ALICE_AFTER);  // 8000
+        update(xid, "Bob",   BOB_AFTER);    // 7000
 
         System.out.println("\n  ▶ Phase 1: Redo Log prepare，fsync ✓");
         RedoLogEntry prepareEntry = new RedoLogEntry(xid, RedoLogEntry.State.PREPARE);
@@ -528,13 +526,13 @@ public class TwoPhaseCommitDemo {
 
         System.out.println("\n  ★ [CRASH!] OS 崩溃！OS page cache 丢失，Binlog 未落盘");
         bufferPool.clear();
-        diskData.put("Alice", 1000);
-        diskData.put("Bob", 500);
+        diskData.put("Alice", ALICE_INIT);  // 10000
+        diskData.put("Bob",   BOB_INIT);    // 5000
         System.out.println("  Redo Log：有 PREPARE，有 DATA（已落盘）");
         System.out.println("  Binlog ：XID_COMMIT 在 OS cache 里，随 OS 崩溃丢失了");
 
         crashRecovery("sync_binlog=0，OS崩溃");
-        System.out.println("✗ 主库回滚：Alice=1000, Bob=500（没有转账记录）");
+        System.out.println("✗ 主库回滚：Alice=" + ALICE_INIT + ", Bob=" + BOB_INIT + "（没有转账记录）");
         System.out.println("  如果从库恰好在崩溃前收到了 Binlog → 从库 Alice=800, Bob=700");
         System.out.println("  主从数据不一致！这是 sync_binlog=0 的核心风险。");
         System.out.println("  生产环境金融场景必须使用 sync_binlog=1 + innodb_flush_log_at_trx_commit=1（双1配置）");

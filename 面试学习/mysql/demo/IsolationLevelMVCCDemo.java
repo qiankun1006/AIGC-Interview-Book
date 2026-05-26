@@ -64,7 +64,7 @@ import java.util.*;
  *   · 真实当前读需要加锁（Gap Lock/Next-Key Lock），这里仅文字说明
  *   · 真实事务 ID 是 6B 整数，这里用 long 模拟
  */
-public class IsolationLevelMVCCDemo {
+public class IsolationLevelMVCCDemo extends MysqlDemoBase {
 
     // ==================== 隔离级别枚举 ====================
 
@@ -339,15 +339,15 @@ public class IsolationLevelMVCCDemo {
         activeTxIds.clear();
         committedTxIds.clear();
         trxIdCounter = 1;
-        // trxId=0 代表"系统初始化"，写入初始数据
-        database.put("Alice", new RowVersion("Alice", 1000, 0, null));
-        database.put("Bob",   new RowVersion("Bob",    500, 0, null));
+        // trxId=0 代表“系统初始化”，写入初始数据
+        database.put("Alice", new RowVersion("Alice", ALICE_INIT, 0, null));  // 10000
+        database.put("Bob",   new RowVersion("Bob",   BOB_INIT,   0, null));  // 5000
     }
 
     // ==================== 主程序 ====================
 
     public static void main(String[] args) {
-        header("MVCC + 四种隔离级别完整演示  初始：Alice=1000, Bob=500");
+        header("MVCC + 四种隔离级别完整演示  初始：Alice=" + ALICE_INIT + ", Bob=" + BOB_INIT);
 
         resetData();
         System.out.println("\n══════════════ 场景1：脏读（READ UNCOMMITTED）══════════════");
@@ -374,7 +374,7 @@ public class IsolationLevelMVCCDemo {
         demo_readViewVisibility();
 
         resetData();
-        System.out.println("\n══════════════ 场景7：转账一致性验证（Alice→Bob 200 元）══════════════");
+        System.out.println("\n══════════════ 场景7：转账一致性验证（Alice→Bob " + TRANSFER_AMT + " 元）══════════════");
         demo_transferConsistency();
     }
 
@@ -393,23 +393,23 @@ public class IsolationLevelMVCCDemo {
      *
      *   T1  txA BEGIN
      *   T2  txB BEGIN
-     *   T3  txA WRITE Alice=800（未提交！）
-     *   T4  txB READ  Alice → 读到 800  ← 脏读！
+     *   T3  txA WRITE Alice=8000（转出 2000），但未提交
+     *   T4  txB READ  Alice → 读到 8000  ← 脏读！
      *   T5  txA ROLLBACK
-     *   T6  txB READ  Alice → 读到 1000（800 从未真实存在）
+     *   T6  txB READ  Alice → 读到 10000（8000 从未真实存在）
      *
-     * 问题：txB 基于 800 做业务决策（如"余额足够，允许转账"），
+     * 问题：txB 基于 8000 做业务决策（如"余额足够，允许转账"），
      *       txA 一旦回滚，txB 的决策就基于了根本不存在的数据。
      */
     static void demo_dirtyRead() {
         sep("时间线：txA 写未提交，txB 用 READ_UNCOMMITTED 读");
-        System.out.println("  预期：txB 读到未提交的 800（脏读），txA 回滚后又变回 1000");
+        System.out.println("  预期：txB 读到未提交的 " + ALICE_AFTER + "（脏读），txA 回滚后又变回 " + ALICE_INIT);
 
         long txA = beginTransaction("txA");
         long txB = beginTransaction("txB");
 
-        sep("T3: txA 将 Alice 改为 800（转出 200），但未提交");
-        write(txA, "Alice", 800);
+        sep("T3: txA 将 Alice 改为 " + ALICE_AFTER + "（转出 " + TRANSFER_AMT + "），但未提交");
+        write(txA, "Alice", ALICE_AFTER);  // 8000
         printVersionChain("Alice");
 
         sep("T4: txB 读 Alice（READ_UNCOMMITTED = 直接读最新版本）");
@@ -417,14 +417,14 @@ public class IsolationLevelMVCCDemo {
         System.out.println("  ⚡ 脏读！txB 看到 Alice=" + val1 + "，但 txA 还没提交");
         System.out.println("  ⚡ txB 可能据此做出错误的业务决策（如：认为转账已扣款成功）");
 
-        sep("T5: txA 回滚（Undo Log 恢复 Alice=1000）");
+        sep("T5: txA 回滚（Undo Log 恢复 Alice=" + ALICE_INIT + "）");
         rollback(txA, "txA");
         printVersionChain("Alice");
 
         sep("T6: txB 再读 Alice");
         int val2 = snapshotRead(txB, "Alice", null, IsolationLevel.READ_UNCOMMITTED, "txB");
         System.out.println("  第一次读=" + val1 + "，第二次读=" + val2 + "  ← 数据变了！");
-        System.out.println("  结论：READ_UNCOMMITTED 存在脏读，txB 之前看到的 800 从未真实提交过");
+        System.out.println("  结论：READ_UNCOMMITTED 存在脏读，txB 之前看到的 " + ALICE_AFTER + " 从未真实提交过");
 
         commit(txB, "txB");
         System.out.println("\n  [总结] ✗ READ_UNCOMMITTED 存在脏读（生产几乎不用此级别）");
@@ -438,9 +438,9 @@ public class IsolationLevelMVCCDemo {
      * 代价：同一事务两次读同一行可能结果不同（不可重复读）。
      *
      * 时间线：
-     *   T1  txB BEGIN，第1次读 Alice → 1000
-     *   T2  txA BEGIN，修改 Alice=800，COMMIT
-     *   T3  txB 第2次读 Alice → 800（不可重复读！）
+     *   T1  txB BEGIN，第1次读 Alice → 10000
+     *   T2  txA BEGIN，修改 Alice=8000，COMMIT
+     *   T3  txB 第2次读 Alice → 8000（不可重复读！）
      */
     static void demo_nonRepeatableRead() {
         sep("时间线：txB 两次读 Alice，中间 txA 修改并提交");
@@ -454,8 +454,8 @@ public class IsolationLevelMVCCDemo {
         int val1 = snapshotRead(txB, "Alice", null, IsolationLevel.READ_COMMITTED, "txB");
         System.out.println("  → txB 第1次读到 Alice=" + val1);
 
-        sep("T2: txA 将 Alice 改为 800 并提交");
-        write(txA, "Alice", 800);
+        sep("T2: txA 将 Alice 改为 " + ALICE_AFTER + " 并提交");
+        write(txA, "Alice", ALICE_AFTER);  // 8000
         commit(txA, "txA");
         printVersionChain("Alice");
 
@@ -478,9 +478,9 @@ public class IsolationLevelMVCCDemo {
      * 无论其他事务如何提交，本事务看到的"快照"永远不变。
      *
      * 时间线：
-     *   T1  txB BEGIN，第1次读 Alice → 1000（创建 ReadView，m_ids={txA}）
-     *   T2  txA 修改 Alice=800 并提交
-     *   T3  txB 第2次读 Alice → 仍然 1000（复用 ReadView，txA 在 m_ids=不可见）
+     *   T1  txB BEGIN，第1次读 Alice → 10000（创建 ReadView，m_ids={txA}）
+     *   T2  txA 修改 Alice=8000 并提交
+     *   T3  txB 第2次读 Alice → 仍然 10000（复用 ReadView，txA 在 m_ids=不可见）
      */
     static void demo_repeatableRead() {
         sep("时间线：txB 两次读 Alice，中间 txA 修改并提交");
@@ -494,14 +494,14 @@ public class IsolationLevelMVCCDemo {
         int val1 = snapshotRead(txB, "Alice", rv, IsolationLevel.REPEATABLE_READ, "txB");
         System.out.println("  → txB 第1次读到 Alice=" + val1);
 
-        sep("T2: txA 将 Alice 改为 800 并提交");
-        write(txA, "Alice", 800);
+        sep("T2: txA 将 Alice 改为 " + ALICE_AFTER + " 并提交");
+        write(txA, "Alice", ALICE_AFTER);  // 8000
         commit(txA, "txA");
         printVersionChain("Alice");
 
         sep("T3: txB 第2次读 Alice（RR：复用同一个 ReadView）");
         System.out.println("  txA.trxId=" + (trxIdCounter - 2) + " 在 m_ids=" + rv.mIds +
-                           " 中，所以 txA 写入的 val=800 对 txB 不可见");
+                           " 中，所以 txA 写入的 val=" + ALICE_AFTER + " 对 txB 不可见");
         int val2 = snapshotRead(txB, "Alice", rv, IsolationLevel.REPEATABLE_READ, "txB");
         System.out.println("  → txB 第2次读到 Alice=" + val2);
 
@@ -527,14 +527,14 @@ public class IsolationLevelMVCCDemo {
             long txA = beginTransaction("txA");
             long txB = beginTransaction("txB");
 
-            sep("T1: txB 快照读，统计余额 > 600 的账户（此时只有 Alice=1000）");
+            sep("T1: txB 快照读，统计余额 > 5000 的账户（此时只有 Alice=" + ALICE_INIT + "）");
             ReadView rv = createReadView(txB, "txB");
             int aliceVal = snapshotRead(txB, "Alice", rv, IsolationLevel.REPEATABLE_READ, "txB");
-            System.out.println("  txB 看到 Alice=" + aliceVal + "（满足>600），共 1 个账户");
+            System.out.println("  txB 看到 Alice=" + aliceVal + "（满足>5000），共 1 个账户");
 
-            sep("T2: txA 新增 Charlie=800 并提交（幻影行）");
+            sep("T2: txA 新增 Charlie=8800 并提交（幻影行）");
             // 注意：Charlie 由 txA 写入（trxId=txA），txA 在 rv.mIds 中
-            database.put("Charlie", new RowVersion("Charlie", 800, txA, null));
+            database.put("Charlie", new RowVersion("Charlie", 8800, txA, null));
             commit(txA, "txA");
             System.out.println("  Charlie 已插入且 txA 已提交");
 
@@ -555,19 +555,19 @@ public class IsolationLevelMVCCDemo {
             long txA = beginTransaction("txA");
             long txB = beginTransaction("txB");
 
-            sep("T1: txB 当前读（SELECT FOR UPDATE）统计余额 > 600 的账户");
+            sep("T1: txB 当前读（SELECT FOR UPDATE）统计余额 > 5000 的账户");
             System.out.println("  [当前读] 读最新已提交版本，并加 Next-Key Lock");
-            System.out.println("  txB 当前读看到：Alice=1000，共 1 个（锁定 Alice 行及其间隙）");
+            System.out.println("  txB 当前读看到：Alice=" + ALICE_INIT + "，共 1 个（锁定 Alice 行及其间隙）");
 
-            sep("T2: txA 在间隙插入 Charlie=800 并提交（模拟无 Gap Lock 的情况）");
-            database.put("Charlie", new RowVersion("Charlie", 800, txA, null));
+            sep("T2: txA 在间隙插入 Charlie=8800 并提交（模拟无 Gap Lock 的情况）");
+            database.put("Charlie", new RowVersion("Charlie", 8800, txA, null));
             commit(txA, "txA");
             System.out.println("  真实 MySQL RR 下：txA 的插入会被 Gap Lock 阻塞！");
             System.out.println("  这里模拟未正确加 Gap Lock 的情况（如旧版本 MySQL 或 Bug）");
 
             sep("T3: txB 再次当前读");
             System.out.println("  [当前读] 不走 ReadView，直接读最新已提交版本");
-            System.out.println("  txB 当前读看到：Alice=1000, Charlie=800，共 2 个！");
+            System.out.println("  txB 当前读看到：Alice=" + ALICE_INIT + ", Charlie=8800，共 2 个！");
             System.out.println("  → 第一次1个，第二次2个 → 幻读！✗");
 
             commit(txB, "txB");
@@ -595,8 +595,8 @@ public class IsolationLevelMVCCDemo {
         long txA = beginTransaction("txA(写)");
         long txB = beginTransaction("txB(读)");
 
-        sep("T1: txA 执行 UPDATE Alice=800（持有 X 锁）");
-        write(txA, "Alice", 800);
+        sep("T1: txA 执行 UPDATE Alice=" + ALICE_AFTER + "（持有 X 锁）");
+        write(txA, "Alice", ALICE_AFTER);  // 8000
         System.out.println("  txA 持有 Alice 的 X 锁，其他事务的 S/X 锁均需等待");
 
         sep("T2: txB 执行 SELECT Alice（需要 S 锁，被 X 锁阻塞）");
@@ -633,9 +633,9 @@ public class IsolationLevelMVCCDemo {
         System.out.println("  构造4个事务，覆盖 ReadView 的4条可见性规则");
 
         // txOld 先提交（trxId=1），代表"老的已提交版本"，用于验证规则②
-        sep("准备：txOld 写入 Alice=1000 并提交（老已提交版本，验证规则②）");
+        sep("准备：txOld 写入 Alice=" + ALICE_INIT + " 并提交（老已提交版本，验证规则②）");
         long txOld = beginTransaction("txOld");
-        write(txOld, "Alice", 1000);
+        write(txOld, "Alice", ALICE_INIT);  // 10000
         commit(txOld, "txOld");
 
         // 启动三个并发事务
@@ -644,11 +644,13 @@ public class IsolationLevelMVCCDemo {
         long txB = beginTransaction("txB(创ReadView)");
         long txC = beginTransaction("txC");
 
-        sep("txA 写 Alice=800（未提交，验证规则④：在 m_ids 中=不可见）");
-        write(txA, "Alice", 800);
+        // txA 写 ALICE_AFTER(8000)：和 10000 差距明显，在 m_ids 中=不可见
+        sep("txA 写 Alice=" + ALICE_AFTER + "（未提交，验证规则④：在 m_ids 中=不可见）");
+        write(txA, "Alice", ALICE_AFTER);  // 8000
 
-        sep("txC 写 Alice=900 并提交（验证规则④：不在 m_ids 中=可见）");
-        write(txC, "Alice", 900);
+        // txC 写 9000：和 10000/8000 都不同，不在 m_ids 中=可见
+        sep("txC 写 Alice=9000 并提交（验证规则④：不在 m_ids 中=可见）");
+        write(txC, "Alice", 9000);
         commit(txC, "txC");
 
         sep("txB 创建 ReadView（此时活跃事务：txA, txB；txC 已提交，不在 m_ids）");
@@ -657,35 +659,36 @@ public class IsolationLevelMVCCDemo {
 
         sep("txB 自己写一个版本（验证规则①：自己写的=可见）");
         // 先把 txB 自己的版本放到 Bob 上，不影响 Alice 的验证
-        write(txB, "Bob", 999);
-        System.out.println("  txB 读 Bob（期望看到自己写的 999）");
+        // 5999：和 BOB_INIT(5000)、BOB_AFTER(7000) 明显不同，看到能立即区分
+        write(txB, "Bob", 5999);
+        System.out.println("  txB 读 Bob（期望看到自己写的 5999）");
         int bobVal = snapshotRead(txB, "Bob", rv, IsolationLevel.REPEATABLE_READ, "txB");
-        System.out.println("  → txB 读到 Bob=" + bobVal + "  ← 规则①：自己写的 ✓");
+        System.out.println("  → txB 读到 Bob=" + bobVal + "（期望 5999）  ← 规则①：自己写的 ✓");
 
         sep("验证规则③：txFuture 在 txB 创建 ReadView 之后开启，txB 不应看到它的写入");
-        // 此刻创建 ReadView 后，再开一个未来事务
+        // txFuture 写 7777：和 10000/9000/8000 明显不同，能立即识别"不应被 txB 读到"
         long txFuture = beginTransaction("txFuture");
-        write(txFuture, "Alice", 777);
+        write(txFuture, "Alice", 7777);
         System.out.println("  txFuture.trxId=" + txFuture + " >= maxTrxId=" + rv.maxTrxId +
-                           "，txB 不应看到 777（规则③）");
+                           "，txB 不应看到 7777（规则③）");
         // txFuture 保持未提交（注意：这里为了demo不commit txFuture，确保它在活跃集合里）
 
         sep("txB 读 Alice，沿版本链验证四条规则");
         printVersionChain("Alice");
-        System.out.println("  版本链头到尾：777(txFuture) → 900(txC) → 800(txA) → 1000(txOld) → 1000(trx0)");
+        System.out.println("  版本链头到尾：7777(txFuture) → 9000(txC) → 8000(txA) → 10000(txOld) → 10000(trx0)");
         int aliceVal = snapshotRead(txB, "Alice", rv, IsolationLevel.REPEATABLE_READ, "txB");
         System.out.println("  → txB 最终读到 Alice=" + aliceVal);
 
         System.out.println();
         System.out.println("  ┌─────────────────────────────────────────────────────────────┐");
         System.out.println("  │ 规则验证总结                                                 │");
-        System.out.printf( "  │ 规则① creatorTrxId=%d，txB 写 Bob=999 自己可见       ✓      │%n", txB);
-        System.out.printf( "  │ 规则② txOld.trxId=%d < min=%d，Alice=1000 可见        ✓      │%n",
-                txOld, rv.minTrxId);
-        System.out.printf( "  │ 规则③ txFuture.trxId=%d >= max=%d，Alice=777 不可见   ✓      │%n",
+        System.out.printf( "  │ 规则① creatorTrxId=%d，txB 写 Bob=5999 自己可见      ✓      │%n", txB);
+        System.out.printf( "  │ 规则② txOld.trxId=%d < min=%d，Alice=%d 可见  ✓      │%n",
+                txOld, rv.minTrxId, ALICE_INIT);
+        System.out.printf( "  │ 规则③ txFuture.trxId=%d >= max=%d，Alice=7777 不可见 ✓      │%n",
                 txFuture, rv.maxTrxId);
-        System.out.printf( "  │ 规则④ txA.trxId=%d 在 m_ids → 不可见（800）          ✓      │%n", txA);
-        System.out.printf( "  │ 规则④ txC.trxId=%d 不在 m_ids → 可见（900）          ✓      │%n", txC);
+        System.out.printf( "  │ 规则④ txA.trxId=%d 在 m_ids → 不可见（%d）      ✓      │%n", txA, ALICE_AFTER);
+        System.out.printf( "  │ 规则④ txC.trxId=%d 不在 m_ids → 可见（9000）        ✓      │%n", txC);
         System.out.println("  └─────────────────────────────────────────────────────────────┘");
 
         // 清理
@@ -695,22 +698,23 @@ public class IsolationLevelMVCCDemo {
     }
 
     /**
-     * 场景7：转账一致性验证（Alice → Bob 转账 200 元）
+     * 场景7：转账一致性验证（Alice → Bob 转账 TRANSFER_AMT 元）
      *
      * 演示在 RR 隔离级别下，一个读事务（auditor）在转账进行中和完成后看到的数据：
      *   · 读事务应始终看到一致的快照（总和不变）
      *   · 不会出现"Alice 扣了但 Bob 没收到"的中间状态
      *
      * 时间线：
-     *   T1  auditor BEGIN，第1次读 Alice+Bob 总额
-     *   T2  txTransfer BEGIN，扣 Alice 200，加 Bob 200
+     *   T1  auditor BEGIN，第1次读 Alice+Bob 总额（= ALICE_INIT + BOB_INIT = 15000）
+     *   T2  txTransfer BEGIN，扣 Alice TRANSFER_AMT，加 Bob TRANSFER_AMT
      *   T3  auditor 第2次读（txTransfer 未提交）→ 总额不变（RR 快照隔离）
      *   T4  txTransfer COMMIT
      *   T5  auditor 第3次读（txTransfer 已提交）→ 总额不变（RR 复用 ReadView）
-     *   T6  auditor COMMIT，新事务读 → 总额变化（新 ReadView 能看到转账结果）
+     *   T6  auditor COMMIT，新事务读 → 总额不变，但单项变为 Alice=8000 Bob=7000
      */
     static void demo_transferConsistency() {
-        System.out.println("  转账场景：Alice → Bob 转账 200 元");
+        System.out.println("  转账场景：Alice → Bob 转账 " + TRANSFER_AMT + " 元（Alice: "
+                + ALICE_INIT + "→" + ALICE_AFTER + "，Bob: " + BOB_INIT + "→" + BOB_AFTER + "）");
         System.out.println("  验证：审计事务（auditor）在 RR 下看到的总额始终一致");
 
         long auditor     = beginTransaction("auditor");
@@ -721,11 +725,12 @@ public class IsolationLevelMVCCDemo {
         int aliceV1 = snapshotRead(auditor, "Alice", rv, IsolationLevel.REPEATABLE_READ, "auditor");
         int bobV1   = snapshotRead(auditor, "Bob",   rv, IsolationLevel.REPEATABLE_READ, "auditor");
         int total1  = aliceV1 + bobV1;
-        System.out.printf("  auditor 看到：Alice=%d, Bob=%d, 总额=%d%n", aliceV1, bobV1, total1);
+        System.out.printf("  auditor 看到：Alice=%d, Bob=%d, 总额=%d（期望 %d）%n",
+                aliceV1, bobV1, total1, ALICE_INIT + BOB_INIT);
 
-        sep("T2: txTransfer 执行转账（Alice-200, Bob+200，未提交）");
-        write(txTransfer, "Alice", 800);  // Alice 1000 → 800
-        write(txTransfer, "Bob",   700);  // Bob   500  → 700
+        sep("T2: txTransfer 执行转账（Alice-" + TRANSFER_AMT + ", Bob+" + TRANSFER_AMT + "，未提交）");
+        write(txTransfer, "Alice", ALICE_AFTER);  // 10000 - 2000 = 8000
+        write(txTransfer, "Bob",   BOB_AFTER);    // 5000  + 2000 = 7000
         printVersionChain("Alice");
         printVersionChain("Bob");
         System.out.println("  转账已写入，但 txTransfer 未提交（其他事务不应看到中间状态）");
@@ -756,25 +761,28 @@ public class IsolationLevelMVCCDemo {
         int aliceNew = snapshotRead(newReader, "Alice", rvNew, IsolationLevel.REPEATABLE_READ, "newReader");
         int bobNew   = snapshotRead(newReader, "Bob",   rvNew, IsolationLevel.REPEATABLE_READ, "newReader");
         int totalNew = aliceNew + bobNew;
-        System.out.printf("  newReader 看到：Alice=%d, Bob=%d, 总额=%d%n",
-                aliceNew, bobNew, totalNew);
-        System.out.println("  ✓ 新事务能看到转账结果（Alice 扣 200，Bob 加 200，总额不变）");
+        System.out.printf("  newReader 看到：Alice=%d, Bob=%d, 总额=%d（期望 Alice=%d Bob=%d 总=%d）%n",
+                aliceNew, bobNew, totalNew, ALICE_AFTER, BOB_AFTER, ALICE_AFTER + BOB_AFTER);
+        System.out.println("  ✓ 新事务能看到转账结果（Alice 扣 " + TRANSFER_AMT
+                + "，Bob 加 " + TRANSFER_AMT + "，总额不变）");
         commit(newReader, "newReader");
 
+        int totalExpected = ALICE_INIT + BOB_INIT;  // 15000
         System.out.println();
-        System.out.printf("  ┌───────────────────────────────────────────────────┐%n");
-        System.out.printf("  │ 转账一致性验证汇总                                │%n");
-        System.out.printf("  │ T1 快照（转账前）：Alice=%-4d Bob=%-4d 总额=%-4d │%n",
+        System.out.printf("  ┌─────────────────────────────────────────────────────┐%n");
+        System.out.printf("  │ 转账一致性验证汇总（转账金额 %d，总额恒为 %d）         │%n",
+                TRANSFER_AMT, totalExpected);
+        System.out.printf("  │ T1 快照（转账前）：Alice=%-5d Bob=%-5d 总额=%-5d │%n",
                 aliceV1, bobV1, total1);
-        System.out.printf("  │ T3 快照（转账中）：Alice=%-4d Bob=%-4d 总额=%-4d │%n",
+        System.out.printf("  │ T3 快照（转账中）：Alice=%-5d Bob=%-5d 总额=%-5d │%n",
                 aliceV2, bobV2, total2);
-        System.out.printf("  │ T5 快照（提交后）：Alice=%-4d Bob=%-4d 总额=%-4d │%n",
+        System.out.printf("  │ T5 快照（提交后）：Alice=%-5d Bob=%-5d 总额=%-5d │%n",
                 aliceV3, bobV3, total3);
-        System.out.printf("  │ T6 新事务快照  ：Alice=%-4d Bob=%-4d 总额=%-4d │%n",
+        System.out.printf("  │ T6 新事务快照  ：Alice=%-5d Bob=%-5d 总额=%-5d │%n",
                 aliceNew, bobNew, totalNew);
-        System.out.printf("  │ ✓ auditor 三次读到的总额完全一致（MVCC 快照保证）│%n");
-        System.out.printf("  │ ✓ 新事务正确看到转账结果（ReadView 创建时机决定） │%n");
-        System.out.printf("  └───────────────────────────────────────────────────┘%n");
+        System.out.printf("  │ ✓ auditor 三次读到的总额完全一致（MVCC 快照保证）   │%n");
+        System.out.printf("  │ ✓ 新事务正确看到转账结果（ReadView 创建时机决定）   │%n");
+        System.out.printf("  └─────────────────────────────────────────────────────┘%n");
 
         System.out.println("\n  [总结] MVCC 通过版本链 + ReadView 保证：");
         System.out.println("         1. 读不阻塞写，写不阻塞读（高并发）");

@@ -1,0 +1,4 @@
+8|BEGIN||0|0|true
+8|ROW_CHANGE|Alice|10000|8000|true
+8|ROW_CHANGE|Bob|5000|7000|true
+8|XID_COMMIT||0|0|true
