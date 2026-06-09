@@ -321,15 +321,26 @@ public class TransactionEngine extends MysqlDemoBase {
     /**
      * 读取数据（优先走 Buffer Pool，缺页时从磁盘加载）
      *
-     * ★ 面试知识点（快照读 vs 当前读）：
+     * ⚠ 本类侧重点说明（防止误导）：
+     *   TransactionEngine 演示的是 WAL / 两阶段提交 / 崩溃恢复 等【持久化流程】，
+     *   这里的 read() 直接返回 Buffer Pool 中的最新值，属于"当前读"语义，
+     *   刻意省略了 MVCC 版本链遍历，以保持代码聚焦。
+     *
+     *   如需了解【快照读 / MVCC / ReadView 可见性判断】的完整实现，请查看：
+     *   → IsolationLevelMVCCDemo#snapshotRead()
+     *     该方法完整模拟了版本链遍历 + ReadView 四条可见性规则，
+     *     以及 READ UNCOMMITTED / READ COMMITTED / REPEATABLE READ / SERIALIZABLE
+     *     四种隔离级别下快照读行为的差异。
+     *
+     * ★ 面试知识点（快照读 vs 当前读，概念补充）：
      *   "普通 SELECT 是'快照读'，通过 MVCC 读历史版本，不加任何行锁。
      *    SELECT ... FOR UPDATE / UPDATE / DELETE 是'当前读'，
      *    读的是最新版本，并且要加行锁（Record X Lock）防止并发修改。
-     *    这个方法被 update() 调用，走的是当前读路径（加锁在 update() 里统一处理）。"
+     *    本方法被 update() 调用，走的是当前读路径（加锁在 update() 里统一处理）。"
      *
      * Buffer Pool 缺页时（page fault）：
      *   从 data.ibd 把整个 16KB 数据页加载到 Buffer Pool，
-     *   后续读同一行就不用再走磁盘了（这就是 Buffer Pool 的命中率的意义）。
+     *   后续读同一行就不用再走磁盘了（这就是 Buffer Pool 命中率的意义）。
      */
     static int read(String key) {
         if (bufferPool.containsKey(key)) {
